@@ -1,0 +1,26 @@
+name: Price source check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Try the price sources
+        run: |
+          set +e
+          UA="Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
+          for host in query1 query2; do
+            for s in '^NSEI' BEL.NS 'M&M.NS' ETERNAL.NS ACUTAAS.NS; do
+              enc=$(jq -rn --arg s "$s" '$s|@uri')
+              code=$(curl -s -A "$UA" -o /tmp/r.json -w "%{http_code}" "https://${host}.finance.yahoo.com/v8/finance/chart/${enc}?interval=1d&range=1d")
+              echo "== $host $s HTTP $code"
+              head -c 300 /tmp/r.json; echo
+            done
+          done
+          echo "== Google Finance BEL"
+          curl -s -A "$UA" -o /tmp/g.html -w "%{http_code}\n" "https://www.google.com/finance/quote/BEL:NSE"
+          grep -o 'data-last-price="[0-9.]*"' /tmp/g.html | head -1
+          exit 0

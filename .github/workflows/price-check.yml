@@ -20,7 +20,14 @@ jobs:
               head -c 300 /tmp/r.json; echo
             done
           done
-          echo "== Google Finance BEL"
-          curl -s -A "$UA" -o /tmp/g.html -w "%{http_code}\n" "https://www.google.com/finance/quote/BEL:NSE"
-          grep -o 'data-last-price="[0-9.]*"' /tmp/g.html | head -1
+          for q in BEL:NSE M%26M:NSE ETERNAL:NSE ACUTAAS:NSE NIFTY_50:INDEXNSE; do
+            echo "== Google Finance $q"
+            curl -s -A "$UA" -H "Accept-Language: en-US,en;q=0.9" -o /tmp/g.html -w "HTTP %{http_code} bytes %{size_download}\n" "https://www.google.com/finance/quote/$q?hl=en"
+            grep -o '<title>[^<]*' /tmp/g.html | head -1
+            grep -o 'data-last-price="[^"]*"' /tmp/g.html | head -2
+            grep -o 'data-last-normal-market-timestamp="[^"]*"' /tmp/g.html | head -1
+            grep -o 'class="YMlKec fxKbKc">[^<]*' /tmp/g.html | head -1
+            grep -o 'Previous close</div>.\{0,300\}' /tmp/g.html | grep -o 'P6K39c">[^<]*' | head -1
+            grep -o 'Year range</div>.\{0,300\}' /tmp/g.html | grep -o 'P6K39c">[^<]*' | head -1
+          done
           exit 0

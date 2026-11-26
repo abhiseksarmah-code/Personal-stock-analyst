@@ -206,6 +206,8 @@ public final class Engine {
 
         JSONObject prev = new JSONObject(sp.getString("signals", "{}"));
         boolean[] yahooOk = {true};
+        double pfInvested = 0, pfValue = 0, pfPrevValue = 0;
+        int pfOwned = 0, pfPriced = 0;
         JSONObject next = new JSONObject();
         JSONArray out = new JSONArray();
         JSONArray holdings = feed.optJSONArray("holdings");
@@ -221,6 +223,7 @@ public final class Engine {
             String tag = h.isNull("analystTag") ? "" : h.optString("analystTag", "");
             boolean thesisOk = h.optBoolean("thesisOk", true);
             String nextBuyFrom = h.optString("nextBuyFrom", "");
+            if (bought > 0) pfOwned++;
 
             JSONObject q = null;
             try {
@@ -240,6 +243,13 @@ public final class Engine {
                 double p = q.getDouble("price");
                 double day = q.getDouble("changePct") / 100.0;
                 h.put("price", p);
+                h.put("prevClose", q.getDouble("prevClose"));
+                if (bought > 0) {
+                    pfValue += p * bought;
+                    pfPrevValue += q.getDouble("prevClose") * bought;
+                    pfInvested += (avg > 0 ? avg : entry) * bought;
+                    pfPriced++;
+                }
                 h.put("changePct", q.getDouble("changePct"));
                 h.put("high52", q.getDouble("high52"));
                 h.put("quoteTime", q.getLong("time"));
@@ -325,7 +335,20 @@ public final class Engine {
             errors.put("Nifty: live level unavailable");
         }
 
+        JSONObject portfolio = new JSONObject();
+        portfolio.put("owned", pfOwned);
+        portfolio.put("priced", pfPriced);
+        if (pfPriced > 0) {
+            portfolio.put("value", pfValue);
+            portfolio.put("invested", pfInvested);
+            portfolio.put("dayChange", pfValue - pfPrevValue);
+            portfolio.put("dayPct", pfPrevValue > 0 ? (pfValue / pfPrevValue - 1) * 100 : 0);
+            portfolio.put("gain", pfValue - pfInvested);
+            portfolio.put("gainPct", pfInvested > 0 ? (pfValue / pfInvested - 1) * 100 : 0);
+        }
+
         JSONObject state = new JSONObject();
+        state.put("portfolio", portfolio);
         state.put("fetchedAt", System.currentTimeMillis());
         state.put("planUpdated", feed.optString("updated", ""));
         state.put("summary", feed.optString("summary", ""));

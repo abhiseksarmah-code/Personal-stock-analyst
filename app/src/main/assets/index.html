@@ -29,10 +29,13 @@
   button.refresh { border: 1px solid var(--line); background: var(--card); color: var(--ink);
     border-radius: 999px; padding: 8px 14px; font: inherit; font-size: 14px; }
   button.refresh.busy { opacity: 0.55; }
-  .market { margin: 10px 16px 0; padding: 12px 14px; background: var(--card); border: 1px solid var(--line);
-    border-radius: 14px; display: flex; justify-content: space-between; align-items: baseline; }
-  .market b { font-size: 17px; }
-  .market.dip { border-color: var(--sell); background: var(--sell-bg); }
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 16px 0; }
+  .tile { padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; min-width: 0; }
+  .tile .lbl { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .tile b { display: block; font-size: 18px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .chg { margin-left: 0; font-size: 14px; }
+  .tile .meta { margin-top: 2px; font-size: 12px; }
+  .tile.dip { border-color: var(--sell); background: var(--sell-bg); }
   .counts { display: flex; gap: 8px; padding: 12px 16px 4px; overflow-x: auto; }
   .tab { flex: none; border: 1px solid var(--line); background: var(--card); color: var(--ink);
     border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; }
@@ -72,7 +75,10 @@
     <button class="refresh" id="btn" onclick="refresh()">Refresh</button>
   </div>
 </header>
-<div class="market" id="market" style="display:none"></div>
+<div class="tiles" id="tiles" style="display:none">
+  <div class="tile" id="mine"></div>
+  <div class="tile" id="market"></div>
+</div>
 <div class="err" id="err"></div>
 <div class="counts" id="tabs"></div>
 <main id="list"><div class="empty">Fetching prices…</div></main>
@@ -123,14 +129,30 @@
       "Checked " + time(s.fetchedAt) + " · refreshes hourly";
     document.getElementById("err").textContent = (s.errors || []).join(" · ");
 
-    var m = s.market || {}, mk = document.getElementById("market");
+    var m = s.market || {}, pf = s.portfolio || {};
+    var tiles = document.getElementById("tiles"), mk = document.getElementById("market"), mine = document.getElementById("mine");
+    if (m.price || pf.priced) tiles.style.display = "grid";
+    if (pf.priced) {
+      var vsN = (m.changePct != null && pf.dayPct != null) ? pf.dayPct - m.changePct : null;
+      mine.innerHTML = "<div class='lbl'>My holdings · " + pf.owned + " stocks</div>" +
+        "<b>" + rs(pf.value, 0) + "</b>" +
+        "<span class='chg " + (pf.dayChange >= 0 ? "up" : "down") + "'>" + pct(pf.dayPct) + " today (" +
+        (pf.dayChange >= 0 ? "+" : "\u2212") + rs(Math.abs(pf.dayChange), 0) + ")</span>" +
+        "<div class='meta'>Total <span class='" + (pf.gain >= 0 ? "up" : "down") + "'>" + pct(pf.gainPct) + " (" +
+        (pf.gain >= 0 ? "+" : "\u2212") + rs(Math.abs(pf.gain), 0) + ")</span> on " + rs(pf.invested, 0) + "</div>" +
+        (vsN != null ? "<div class='meta'>" + (vsN >= 0 ? "Ahead of" : "Behind") + " Nifty by " + Math.abs(vsN).toFixed(1) + " pts today</div>" : "");
+    } else {
+      mine.innerHTML = "<div class='lbl'>My holdings</div><b>—</b><div class='meta'>" +
+        (pf.owned ? "Prices unavailable" : "Nothing bought yet") + "</div>";
+    }
     if (m.price) {
-      mk.style.display = "flex";
-      mk.className = m.dip ? "market dip" : "market";
-      mk.innerHTML = "<div><div class='meta' style='margin:0'>" + (m.dip ? "MARKET DIP · deploy reserve" : "Nifty 50") +
-        "</div><b>" + num(m.price, 0) + "</b> <span class='chg " + (m.changePct >= 0 ? "up" : "down") + "'>" +
-        pct(m.changePct) + "</span></div><div class='meta' style='margin:0;text-align:right'>" +
-        (m.fromHighPct != null ? Math.abs(m.fromHighPct).toFixed(1) + "% below 52-wk high" : "") + "</div>";
+      mk.className = m.dip ? "tile dip" : "tile";
+      mk.innerHTML = "<div class='lbl'>" + (m.dip ? "Market dip · use reserve" : "Nifty 50") + "</div>" +
+        "<b>" + num(m.price, 0) + "</b>" +
+        "<span class='chg " + (m.changePct >= 0 ? "up" : "down") + "'>" + pct(m.changePct) + " today</span>" +
+        (m.fromHighPct != null ? "<div class='meta'>" + Math.abs(m.fromHighPct).toFixed(1) + "% below 52-wk high</div>" : "");
+    } else {
+      mk.innerHTML = "<div class='lbl'>Nifty 50</div><b>—</b>";
     }
 
     var hs = s.holdings.slice().sort(function (a, b) {

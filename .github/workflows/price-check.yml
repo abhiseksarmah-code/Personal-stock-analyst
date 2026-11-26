@@ -3,31 +3,24 @@ name: Price source check
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Try the price sources
+      - name: Save sample Google Finance pages to the debug branch
         run: |
           set +e
           UA="Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
-          for host in query1 query2; do
-            for s in '^NSEI' BEL.NS 'M&M.NS' ETERNAL.NS ACUTAAS.NS; do
-              enc=$(jq -rn --arg s "$s" '$s|@uri')
-              code=$(curl -s -A "$UA" -o /tmp/r.json -w "%{http_code}" "https://${host}.finance.yahoo.com/v8/finance/chart/${enc}?interval=1d&range=1d")
-              echo "== $host $s HTTP $code"
-              head -c 300 /tmp/r.json; echo
-            done
-          done
-          for q in BEL:NSE M%26M:NSE ETERNAL:NSE ACUTAAS:NSE NIFTY_50:INDEXNSE; do
-            echo "== Google Finance $q"
-            curl -s -A "$UA" -H "Accept-Language: en-US,en;q=0.9" -o /tmp/g.html -w "HTTP %{http_code} bytes %{size_download}\n" "https://www.google.com/finance/quote/$q?hl=en"
-            grep -o '<title>[^<]*' /tmp/g.html | head -1
-            grep -o 'data-last-price="[^"]*"' /tmp/g.html | head -2
-            grep -o 'data-last-normal-market-timestamp="[^"]*"' /tmp/g.html | head -1
-            grep -o 'class="YMlKec fxKbKc">[^<]*' /tmp/g.html | head -1
-            grep -o 'Previous close</div>.\{0,300\}' /tmp/g.html | grep -o 'P6K39c">[^<]*' | head -1
-            grep -o 'Year range</div>.\{0,300\}' /tmp/g.html | grep -o 'P6K39c">[^<]*' | head -1
-          done
-          exit 0
+          mkdir out && cd out
+          curl -s -A "$UA" -H "Accept-Language: en-US,en;q=0.9" -o bel.html "https://www.google.com/finance/quote/BEL:NSE?hl=en"
+          curl -s -A "$UA" -H "Accept-Language: en-US,en;q=0.9" -o nifty.html "https://www.google.com/finance/quote/NIFTY_50:INDEXNSE?hl=en"
+          curl -s -A "$UA" -H "Accept-Language: en-US,en;q=0.9" -o bel_beta.html "https://www.google.com/finance/beta/quote/BEL:NSE?hl=en"
+          ls -la
+          git init -q -b debug
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -q -m "debug pages"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" debug

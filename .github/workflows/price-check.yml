@@ -11,19 +11,36 @@ jobs:
       - name: Check every symbol on Google Finance (the app's backup source)
         run: |
           python3 - <<'PY'
-          import json, re, urllib.request, urllib.parse
+          import json, os, re, urllib.request, urllib.parse
           UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
-          feed = json.load(open("data/portfolio.json"))
-          syms = [h.get("google", h["symbol"] + ":NSE") for h in feed["holdings"]] + [feed.get("marketGoogle", "NIFTY_50:INDEXNSE")]
+          syms = []
+          for f, key in [("data/portfolio.json", "holdings"), ("data/portfolio_us.json", "holdings"), ("data/us_candidates.json", "candidates")]:
+              if not os.path.exists(f):
+                  continue
+              d = json.load(open(f))
+              syms += [h.get("google", h["symbol"] + ":NSE") for h in d.get(key, [])]
+              if d.get("marketGoogle"):
+                  syms.append(d["marketGoogle"])
+          syms.append("NIFTY_50:INDEXNSE")
+          pat = r'\["%s","%s"\],"(?:[^"\\]|\\.)*",\d+,(?:"[A-Z]{3}"|null),\[(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+)[^\]]*\],null,(-?[0-9.Ee+-]+)'
+          def lab(body, name):
+              m = re.search(r'>' + name + r'</div><div class="[^"]*">[^0-9<]*([0-9,]+(?:\.[0-9]+)?)', body)
+              return m.group(1) if m else "?"
+          seen = set()
           for g in syms:
+              if g in seen:
+                  continue
+              seen.add(g)
               sym, ex = g.split(":")
               url = "https://www.google.com/finance/quote/%s:%s?hl=en" % (urllib.parse.quote(sym, safe=""), ex)
               try:
                   req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"})
                   body = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "ignore")
-                  pat = r'\["%s","%s"\],"(?:[^"\\]|\\.)*",\d+,(?:"[A-Z]{3}"|null),\[(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+)[^\]]*\],null,(-?[0-9.Ee+-]+)'
                   m = re.search(pat % (re.escape(sym), re.escape(ex)), body) or re.search(pat % (re.escape(sym.replace("&", "\\u0026")), re.escape(ex)), body)
-                  print(g, "->", ("price %s prev %s" % (m.group(1), m.group(4))) if m else "NOT FOUND")
+                  if m:
+                      print("%s -> price %s prev %s 52wH %s 52wL %s" % (g, m.group(1), m.group(4), lab(body, "52-wk high"), lab(body, "52-wk low")))
+                  else:
+                      print(g, "-> NOT FOUND")
               except Exception as e:
                   print(g, "-> ERROR", e)
           PY

@@ -16,6 +16,7 @@ import org.json.JSONObject;
 public class MainActivity extends Activity {
     private WebView web;
     private boolean firstResume = true;
+    private String startMarket = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -27,6 +28,8 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Bridge(), "Android");
         web.setWebViewClient(new WebViewClient());
         setContentView(web);
+        String m = getIntent() != null ? getIntent().getStringExtra("market") : null;
+        if (m != null) startMarket = m;
         web.loadUrl("file:///android_asset/index.html");
 
         Engine.ensureChannel(this);
@@ -35,6 +38,13 @@ public class MainActivity extends Activity {
                 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
         }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        String m = intent.getStringExtra("market");
+        if (m != null && web != null) web.evaluateJavascript("window.openMarket && window.openMarket('" + ("us".equals(m) ? "us" : "india") + "')", null);
     }
 
     @Override
@@ -50,7 +60,12 @@ public class MainActivity extends Activity {
     class Bridge {
         @JavascriptInterface
         public String state() {
-            return getSharedPreferences(Engine.PREFS, MODE_PRIVATE).getString("state", "");
+            return Engine.combinedState(getApplicationContext()).toString();
+        }
+
+        @JavascriptInterface
+        public String startMarket() {
+            return startMarket;
         }
 
         @JavascriptInterface
@@ -58,7 +73,7 @@ public class MainActivity extends Activity {
             new Thread(() -> {
                 String s;
                 try {
-                    s = Engine.run(getApplicationContext(), true).toString();
+                    s = Engine.runAll(getApplicationContext(), true, false).toString();
                 } catch (Exception e) {
                     s = "{\"error\":" + JSONObject.quote(String.valueOf(e.getMessage())) + "}";
                 }

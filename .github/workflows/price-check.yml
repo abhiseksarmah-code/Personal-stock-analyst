@@ -14,7 +14,7 @@ jobs:
           import json, os, re, urllib.request, urllib.parse
           UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
           syms = []
-          for f, key in [("data/portfolio.json", "holdings"), ("data/portfolio_us.json", "holdings"), ("data/us_candidates.json", "candidates")]:
+          for f, key in [("data/portfolio.json", "holdings"), ("data/portfolio_us.json", "holdings"), ("data/portfolio_us.json", "holdings")]:
               if not os.path.exists(f):
                   continue
               d = json.load(open(f))

@@ -29,6 +29,14 @@
   button.refresh { border: 1px solid var(--line); background: var(--card); color: var(--ink);
     border-radius: 999px; padding: 8px 14px; font: inherit; font-size: 14px; }
   button.refresh.busy { opacity: 0.55; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 12px; padding: 4px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+  .seg button { border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 15px;
+    font-weight: 600; padding: 8px 0; border-radius: 9px; }
+  .seg button.on { background: var(--ink); color: var(--bg); }
+  .seg .badge { display: inline-block; min-width: 20px; padding: 0 6px; margin-left: 6px; border-radius: 999px;
+    font-size: 12px; line-height: 20px; background: var(--buy-bg); color: var(--buy); }
+  .seg button.on .badge { background: var(--bg); color: var(--ink); }
   .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 16px 0; }
   .tile { padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; min-width: 0; }
   .tile .lbl { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; }
@@ -74,6 +82,10 @@
     </div>
     <button class="refresh" id="btn" onclick="refresh()">Refresh</button>
   </div>
+  <div class="seg" id="seg">
+    <button id="seg-india" onclick="openMarket('india')">India<span class="badge" id="badge-india" style="display:none"></span></button>
+    <button id="seg-us" onclick="openMarket('us')">US<span class="badge" id="badge-us" style="display:none"></span></button>
+  </div>
 </header>
 <div class="tiles" id="tiles" style="display:none">
   <div class="tile" id="mine"></div>
@@ -86,22 +98,30 @@
 
 <script>
   var ORDER = { "Sell": 0, "Buy more": 1, "Buy": 2, "Hold": 3, "Wait": 4 };
-  var state = null, filter = "Action";
+  var all = {}, current = "india", filter = "Action";
+  try { current = localStorage.getItem("market") || "india"; } catch (e) {}
 
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
   function num(n, d) {
     if (n == null || isNaN(n)) return "—";
-    d = d == null ? (Math.abs(n) >= 1000 ? 0 : 1) : d;
     return Number(n).toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d });
   }
-  function rs(n, d) { return (n == null || isNaN(n)) ? "—" : "₹" + num(n, d); }
+  function money(s, n, d) {
+    if (n == null || isNaN(n)) return "—";
+    var cs = (s && s.currencySymbol) || "₹";
+    if (d == null) d = Math.abs(n) >= 1000 ? 0 : (cs === "$" ? 2 : 1);
+    var locale = cs === "$" ? "en-US" : "en-IN";
+    return cs + Number(n).toLocaleString(locale, { minimumFractionDigits: d, maximumFractionDigits: d });
+  }
+  function signed(s, n) { return (n >= 0 ? "+" : "−") + money(s, Math.abs(n), 0); }
   function pct(n) { return (n == null || isNaN(n)) ? "" : (n > 0 ? "+" : "") + n.toFixed(1) + "%"; }
+  function shares(s, n) { return s && s.fractional ? Number(n).toFixed(2) : String(Math.round(n)); }
   function cls(sig) { return "s-" + String(sig).replace(/\s/g, ""); }
+  function isAction(h) { return h.signal === "Buy" || h.signal === "Buy more" || h.signal === "Sell"; }
   function time(ms) {
     if (!ms) return "";
-    var d = new Date(ms);
-    return d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+    return new Date(ms).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
   }
 
   function busy(on) {
@@ -117,42 +137,76 @@
     var s;
     try { s = JSON.parse(str); } catch (e) { return; }
     if (s.error) { document.getElementById("err").textContent = s.error; return; }
-    render(s);
+    all = s;
+    renderAll();
   };
 
-  function setFilter(f) { filter = f; render(state); }
+  window.openMarket = function (m) {
+    current = m === "us" ? "us" : "india";
+    filter = "Action";
+    try { localStorage.setItem("market", current); } catch (e) {}
+    renderAll();
+  };
+
+  function setFilter(f) { filter = f; renderAll(); }
+
+  function renderAll() {
+    ["india", "us"].forEach(function (m) {
+      document.getElementById("seg-" + m).className = m === current ? "on" : "";
+      var st = all[m], n = 0;
+      if (st && st.holdings) st.holdings.forEach(function (h) { if (isAction(h)) n++; });
+      var b = document.getElementById("badge-" + m);
+      b.style.display = n ? "inline-block" : "none";
+      b.textContent = n;
+    });
+    render(all[current] || {});
+  }
 
   function render(s) {
-    if (!s || !s.holdings) return;
-    state = s;
-    document.getElementById("when").textContent =
-      "Checked " + time(s.fetchedAt) + " · refreshes hourly";
-    document.getElementById("err").textContent = (s.errors || []).join(" · ");
+    var when = document.getElementById("when");
+    var list = document.getElementById("list");
+    if (!s.holdings) {
+      when.textContent = "Not checked yet · tap Refresh";
+      document.getElementById("tiles").style.display = "none";
+      document.getElementById("tabs").innerHTML = "";
+      document.getElementById("err").textContent = s.error || "";
+      list.innerHTML = "<div class='empty'>No data for this market yet.</div>";
+      document.getElementById("foot").innerHTML = "";
+      return;
+    }
+    when.textContent = "Checked " + time(s.fetchedAt) + " · " + (s.open ? "market open, refreshes hourly" : "market closed");
+    var errs = (s.errors || []).slice();
+    if (s.error) errs.unshift(s.error);
+    document.getElementById("err").textContent = errs.join(" · ");
 
     var m = s.market || {}, pf = s.portfolio || {};
     var tiles = document.getElementById("tiles"), mk = document.getElementById("market"), mine = document.getElementById("mine");
-    if (m.price || pf.priced) tiles.style.display = "grid";
+    tiles.style.display = "grid";
     if (pf.priced) {
       var vsN = (m.changePct != null && pf.dayPct != null) ? pf.dayPct - m.changePct : null;
+      var local = (s.fx && s.localCurrency) ? "<div class='meta'>≈ " + esc(s.localCurrency) + " " +
+        num(pf.value * s.fx, 0) + "</div>" : "";
       mine.innerHTML = "<div class='lbl'>My holdings · " + pf.owned + " stocks</div>" +
-        "<b>" + rs(pf.value, 0) + "</b>" +
+        "<b>" + money(s, pf.value, 0) + "</b>" +
         "<span class='chg " + (pf.dayChange >= 0 ? "up" : "down") + "'>" + pct(pf.dayPct) + " today (" +
-        (pf.dayChange >= 0 ? "+" : "\u2212") + rs(Math.abs(pf.dayChange), 0) + ")</span>" +
+        signed(s, pf.dayChange) + ")</span>" +
         "<div class='meta'>Total <span class='" + (pf.gain >= 0 ? "up" : "down") + "'>" + pct(pf.gainPct) + " (" +
-        (pf.gain >= 0 ? "+" : "\u2212") + rs(Math.abs(pf.gain), 0) + ")</span> on " + rs(pf.invested, 0) + "</div>" +
-        (vsN != null ? "<div class='meta'>" + (vsN >= 0 ? "Ahead of" : "Behind") + " Nifty by " + Math.abs(vsN).toFixed(1) + " pts today</div>" : "");
+        signed(s, pf.gain) + ")</span> on " + money(s, pf.invested, 0) + "</div>" + local +
+        (vsN != null ? "<div class='meta'>" + (vsN >= 0 ? "Ahead of " : "Behind ") + esc(m.name || "the index") +
+          " by " + Math.abs(vsN).toFixed(1) + " pts today</div>" : "");
     } else {
       mine.innerHTML = "<div class='lbl'>My holdings</div><b>—</b><div class='meta'>" +
         (pf.owned ? "Prices unavailable" : "Nothing bought yet") + "</div>";
     }
     if (m.price) {
       mk.className = m.dip ? "tile dip" : "tile";
-      mk.innerHTML = "<div class='lbl'>" + (m.dip ? "Market dip · use reserve" : "Nifty 50") + "</div>" +
+      mk.innerHTML = "<div class='lbl'>" + (m.dip ? "Market dip · use reserve" : esc(m.name || "Index")) + "</div>" +
         "<b>" + num(m.price, 0) + "</b>" +
         "<span class='chg " + (m.changePct >= 0 ? "up" : "down") + "'>" + pct(m.changePct) + " today</span>" +
         (m.fromHighPct != null ? "<div class='meta'>" + Math.abs(m.fromHighPct).toFixed(1) + "% below 52-wk high</div>" : "");
     } else {
-      mk.innerHTML = "<div class='lbl'>Nifty 50</div><b>—</b>";
+      mk.className = "tile";
+      mk.innerHTML = "<div class='lbl'>" + esc(m.name || "Index") + "</div><b>—</b>";
     }
 
     var hs = s.holdings.slice().sort(function (a, b) {
@@ -161,7 +215,7 @@
     var counts = { "Action": 0, "All": hs.length, "Owned": 0 };
     hs.forEach(function (h) {
       counts[h.signal] = (counts[h.signal] || 0) + 1;
-      if (h.signal === "Buy" || h.signal === "Buy more" || h.signal === "Sell") counts.Action++;
+      if (isAction(h)) counts.Action++;
       if (h.boughtShares > 0) counts.Owned++;
     });
     var tabs = ["Action", "All", "Owned", "Buy", "Buy more", "Sell", "Hold", "Wait"];
@@ -174,22 +228,22 @@
 
     var shown = hs.filter(function (h) {
       if (filter === "All") return true;
-      if (filter === "Action") return h.signal === "Buy" || h.signal === "Buy more" || h.signal === "Sell";
+      if (filter === "Action") return isAction(h);
       if (filter === "Owned") return h.boughtShares > 0;
       return h.signal === filter;
     });
 
-    document.getElementById("list").innerHTML = shown.length ? shown.map(function (h) {
+    list.innerHTML = shown.length ? shown.map(function (h) {
       var cost = h.boughtShares > 0 && h.avgCost
-        ? " · Your cost " + rs(h.avgCost) + (h.gainPct != null ? " (" + pct(h.gainPct) + ")" : "") : "";
-      var owned = h.boughtShares > 0 ? "Owned " + h.boughtShares + " of " + h.plannedShares + " shares"
-        : "Plan: " + h.plannedShares + " shares";
+        ? " · Your cost " + money(s, h.avgCost) + (h.gainPct != null ? " (" + pct(h.gainPct) + ")" : "") : "";
+      var owned = h.boughtShares > 0 ? "Owned " + shares(s, h.boughtShares) + " of " + shares(s, h.plannedShares) + " shares"
+        : "Plan: " + shares(s, h.plannedShares) + " shares";
       return "<div class='card'>" +
         "<div class='row'><div class='name'>" + esc(h.name) + "<span class='cap'>" + esc(h.cap || "") + "</span></div>" +
         "<span class='chip " + cls(h.signal) + "'>" + esc(h.signal) + "</span></div>" +
-        "<div class='price'>" + rs(h.price) + "<span class='chg " + (h.changePct >= 0 ? "up" : "down") + "'>" +
+        "<div class='price'>" + money(s, h.price) + "<span class='chg " + (h.changePct >= 0 ? "up" : "down") + "'>" +
         pct(h.changePct) + "</span></div>" +
-        "<div class='meta'>Entry " + rs(h.entry) + cost + "</div>" +
+        "<div class='meta'>Entry " + money(s, h.entry) + cost + "</div>" +
         "<div class='meta'>" + owned + (h.weight ? " · " + h.weight.toFixed(1) + "% of portfolio" : "") + "</div>" +
         "<div class='reason'>" + esc(h.reason) + "</div>" +
         (h.note ? "<div class='note'>" + esc(h.note) + "</div>" : "") +
@@ -198,16 +252,22 @@
       ? "Nothing to do right now. You'll get a notification when a stock turns Buy, Buy more or Sell."
       : "No stocks here.") + "</div>";
 
-    var foot = "Plan updated " + esc(s.planUpdated || "—") + " · Reserve " + rs(s.reserve, 0);
+    var foot = "Plan updated " + esc(s.planUpdated || "—") + " · Reserve " + money(s, s.reserve, 0);
     if (s.summary) foot += "<br>" + esc(s.summary);
-    if (s.docUrl) foot += "<br><a href='#' onclick='Android.open(\"" + esc(s.docUrl) + "\");return false;'>Open the portfolio doc</a>";
-    foot += "<br>Prices from " + esc(s.source || "Yahoo Finance") + ", may be delayed. Hourly checks run on weekdays 9 am to 4:45 pm IST. Research, not financial advice.";
+    if (s.docUrl) foot += "<br><a href='#' onclick='Android.open(\"" + esc(s.docUrl) + "\");return false;'>Open the " +
+      esc(s.label || "") + " portfolio doc</a>";
+    foot += "<br>Prices from " + esc(s.source || "Yahoo Finance") + ", may be delayed. Hourly checks run while each market is open: " +
+      "India 9 am–4:45 pm IST, US 9:30 am–4:15 pm New York time. Research, not financial advice.";
     document.getElementById("foot").innerHTML = foot;
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    var cached = Android.state();
-    if (cached) { try { render(JSON.parse(cached)); } catch (e) {} }
+    try {
+      var start = Android.startMarket();
+      if (start) current = start;
+    } catch (e) {}
+    try { all = JSON.parse(Android.state() || "{}"); } catch (e) { all = {}; }
+    renderAll();
     refresh();
   });
 </script>

@@ -28,18 +28,28 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Downloads the plan (data/portfolio.json in the GitHub repo), fetches live prices,
- * works out a Buy / Wait / Hold / Buy more / Sell signal for every stock, and
- * notifies when a stock turns Buy, Buy more or Sell.
+ * For each market (India, US): downloads the plan from the GitHub repo, fetches live prices,
+ * works out a Buy / Wait / Hold / Buy more / Sell signal for every stock, and notifies when a
+ * stock turns Buy, Buy more or Sell, or when the market dips enough to deploy the reserve.
  */
 public final class Engine {
     static final String FEED_URL = "__FEED_URL__";
+    static final String FEED_URL_US = "__FEED_URL_US__";
+    static final String[] MARKETS = {"india", "us"};
     static final String PREFS = "portfolio";
     static final String CHANNEL = "signals";
     static final int JOB_ID = 1001;
     static final long HOUR = 60L * 60L * 1000L;
 
     private Engine() {}
+
+    static boolean isUs(String m) {
+        return "us".equals(m);
+    }
+
+    static String feedUrl(String m) {
+        return isUs(m) ? FEED_URL_US : FEED_URL;
+    }
 
     /** Hourly background refresh, kept across reboots. */
     static void schedule(Context ctx) {
@@ -78,7 +88,7 @@ public final class Engine {
         return out.toString("UTF-8");
     }
 
-    /** Live quote from Yahoo Finance's chart endpoint (no key needed). */
+    /** Live quote from Yahoo Finance's chart endpoint (no key needed, tiny response). */
     static JSONObject quote(String symbol) throws Exception {
         String path = "/v8/finance/chart/" + URLEncoder.encode(symbol, "UTF-8") + "?interval=1d&range=1d";
         String body;
@@ -98,12 +108,20 @@ public final class Engine {
         q.put("high52", meta.optDouble("fiftyTwoWeekHigh", 0));
         q.put("low52", meta.optDouble("fiftyTwoWeekLow", 0));
         q.put("time", meta.optLong("regularMarketTime", 0) * 1000L);
+        q.put("src", "Yahoo");
         return q;
+    }
+
+    static Matcher googleMatch(String body, String sym, String ex) {
+        Matcher m = Pattern.compile("\\[\"" + Pattern.quote(sym) + "\",\"" + Pattern.quote(ex)
+                + "\"\\],\"(?:[^\"\\\\]|\\\\.)*\",\\d+,(?:\"[A-Z]{3}\"|null),\\[(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+)[^\\]]*\\],null,(-?[0-9.Ee+-]+)")
+                .matcher(body);
+        return m.find() ? m : null;
     }
 
     /** Backup source: the quote data Google Finance embeds in its quote page (about 1.2 MB a page). */
     static JSONObject quoteGoogle(String gsym) throws Exception {
-        int c = gsym.indexOf(':');
+        int c = gsym.lastIndexOf(':');
         String sym = gsym.substring(0, c);
         String ex = gsym.substring(c + 1);
         String body = get("https://www.google.com/finance/quote/" + URLEncoder.encode(sym, "UTF-8") + ":" + ex + "?hl=en");
@@ -129,27 +147,16 @@ public final class Engine {
         return q;
     }
 
-    static Matcher googleMatch(String body, String sym, String ex) {
-        Matcher m = Pattern.compile("\\[\"" + Pattern.quote(sym) + "\",\"" + Pattern.quote(ex)
-                + "\"\\],\"(?:[^\"\\\\]|\\\\.)*\",\\d+,(?:\"[A-Z]{3}\"|null),\\[(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+)[^\\]]*\\],null,(-?[0-9.Ee+-]+)")
-                .matcher(body);
-        return m.find() ? m : null;
-    }
-
-    /** Yahoo first (tiny responses); if Yahoo refuses, Google for the rest of this run. */
+    /** Yahoo first; if Yahoo refuses (HTTP 429), Google for the rest of this run. */
     static JSONObject quoteAny(String yahoo, String yahooAlt, String google, boolean[] yahooOk) throws Exception {
         if (yahooOk[0]) {
             try {
-                JSONObject q = quote(yahoo);
-                q.put("src", "Yahoo");
-                return q;
+                return quote(yahoo);
             } catch (Exception e) {
                 if (String.valueOf(e.getMessage()).contains("429")) yahooOk[0] = false;
                 if (yahooAlt != null && !yahooAlt.isEmpty() && yahooOk[0]) {
                     try {
-                        JSONObject q = quote(yahooAlt);
-                        q.put("src", "Yahoo");
-                        return q;
+                        return quote(yahooAlt);
                     } catch (Exception ignored) {
                         // fall through to Google
                     }
@@ -159,56 +166,109 @@ public final class Engine {
         return quoteGoogle(google);
     }
 
-    /** Weekdays 9:00 am to 4:45 pm India time, when prices move. */
-    static boolean marketHours() {
-        Calendar c = Calendar.getInstance(TimeZone.getTimeZone("Asia/Kolkata"));
+    /** India: weekdays 9:00 am to 4:45 pm IST. US: weekdays 9:30 am to 4:15 pm New York time. */
+    static boolean marketHours(String m) {
+        Calendar c = Calendar.getInstance(TimeZone.getTimeZone(isUs(m) ? "America/New_York" : "Asia/Kolkata"));
         int dow = c.get(Calendar.DAY_OF_WEEK);
         if (dow == Calendar.SATURDAY || dow == Calendar.SUNDAY) return false;
         int mins = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
-        return mins >= 9 * 60 && mins <= 16 * 60 + 45;
+        return isUs(m) ? (mins >= 9 * 60 + 30 && mins <= 16 * 60 + 15) : (mins >= 9 * 60 && mins <= 16 * 60 + 45);
     }
 
-    static String today() {
+    static boolean anyMarketOpen() {
+        for (String m : MARKETS) {
+            if (marketHours(m)) return true;
+        }
+        return false;
+    }
+
+    static String today(String m) {
         SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
-        f.setTimeZone(TimeZone.getTimeZone("Asia/Kolkata"));
+        f.setTimeZone(TimeZone.getTimeZone(isUs(m) ? "America/New_York" : "Asia/Kolkata"));
         return f.format(new Date());
     }
 
-    static String rs(double v) {
-        return "₹" + String.format(Locale.US, v >= 1000 ? "%,.0f" : "%,.1f", v);
+    static String money(String cs, double v) {
+        return cs + String.format(Locale.US, v >= 1000 ? "%,.0f" : "%,.2f", v);
     }
 
-    static synchronized JSONObject run(Context ctx, boolean notify) throws Exception {
+    static String shares(double s, boolean fractional) {
+        return fractional ? String.format(Locale.US, "%.2f", s) : String.valueOf(Math.round(s));
+    }
+
+    /** Refreshes every market (or only those open now) and returns the combined state. */
+    static synchronized JSONObject runAll(Context ctx, boolean notify, boolean onlyOpen) {
         SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        for (String m : MARKETS) {
+            if (onlyOpen && !marketHours(m)) continue;
+            try {
+                runMarket(ctx, m, notify);
+            } catch (Exception e) {
+                try {
+                    JSONObject prev = new JSONObject(sp.getString("state_" + m, "{}"));
+                    prev.put("error", String.valueOf(e.getMessage()));
+                    sp.edit().putString("state_" + m, prev.toString()).apply();
+                } catch (Exception ignored) {
+                    // keep going with the other market
+                }
+            }
+        }
+        return combinedState(ctx);
+    }
+
+    static JSONObject combinedState(Context ctx) {
+        SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        JSONObject all = new JSONObject();
+        for (String m : MARKETS) {
+            try {
+                all.put(m, new JSONObject(sp.getString("state_" + m, "{}")));
+            } catch (Exception ignored) {
+                // skip a broken saved state
+            }
+        }
+        return all;
+    }
+
+    static void runMarket(Context ctx, String m, boolean notify) throws Exception {
+        SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        boolean us = isUs(m);
+        String label = us ? "US" : "India";
         JSONArray errors = new JSONArray();
 
         JSONObject feed;
         try {
-            feed = new JSONObject(get(FEED_URL + "?t=" + System.currentTimeMillis()));
-            sp.edit().putString("feed", feed.toString()).apply();
+            feed = new JSONObject(get(feedUrl(m) + "?t=" + System.currentTimeMillis()));
+            sp.edit().putString("feed_" + m, feed.toString()).apply();
         } catch (Exception e) {
-            String cached = sp.getString("feed", null);
-            if (cached == null) throw new Exception("Could not download the plan: " + e.getMessage());
+            String cached = sp.getString("feed_" + m, us ? null : sp.getString("feed", null));
+            if (cached == null) throw new Exception("Could not download the " + label + " plan: " + e.getMessage());
             feed = new JSONObject(cached);
             errors.put("Plan not refreshed (" + e.getMessage() + "); using the saved copy");
         }
 
+        String cs = feed.optString("currencySymbol", us ? "$" : "\u20B9");
+        boolean fractional = feed.optBoolean("fractional", us);
         JSONObject rules = feed.optJSONObject("rules");
         if (rules == null) rules = new JSONObject();
         double buyBand = rules.optDouble("buyBand", 0.02);
         double buyMoreDrop = rules.optDouble("buyMoreDrop", 0.07);
         double dayDrop = rules.optDouble("dayDrop", 0.07);
         double mktDay = rules.optDouble("marketDayDrop", 0.03);
-        double mktHigh = rules.optDouble("marketFromHigh", 0.08);
+        double mktHigh = rules.optDouble("marketFromHigh", us ? 0.12 : 0.08);
         double maxWeight = rules.optDouble("maxWeight", 0.12);
-        double capital = feed.optDouble("capital", 700000);
-        String today = today();
+        double capital = feed.optDouble("capital", us ? 10892 : 700000);
+        String today = today(m);
+        int idBase = us ? 300 : 100;
 
-        JSONObject prev = new JSONObject(sp.getString("signals", "{}"));
-        boolean[] yahooOk = {true};
-        double pfInvested = 0, pfValue = 0, pfPrevValue = 0;
-        int pfOwned = 0, pfPriced = 0;
+        String savedSignals = sp.getString("signals_" + m, us ? "{}" : sp.getString("signals", "{}"));
+        JSONObject prev = new JSONObject(savedSignals);
         JSONObject next = new JSONObject();
+        boolean[] yahooOk = {true};
+        double pfInvested = 0;
+        double pfValue = 0;
+        double pfPrevValue = 0;
+        int pfOwned = 0;
+        int pfPriced = 0;
         JSONArray out = new JSONArray();
         JSONArray holdings = feed.optJSONArray("holdings");
         if (holdings == null) holdings = new JSONArray();
@@ -216,20 +276,21 @@ public final class Engine {
         for (int i = 0; i < holdings.length(); i++) {
             JSONObject h = new JSONObject(holdings.getJSONObject(i).toString());
             String name = h.optString("name");
+            String sym = h.optString("symbol");
             double entry = h.optDouble("entry", 0);
             double avg = h.isNull("avgCost") ? 0 : h.optDouble("avgCost", 0);
-            int planned = h.optInt("plannedShares", 0);
-            int bought = h.optInt("boughtShares", 0);
+            double planned = h.optDouble("plannedShares", 0);
+            double bought = h.optDouble("boughtShares", 0);
             String tag = h.isNull("analystTag") ? "" : h.optString("analystTag", "");
             boolean thesisOk = h.optBoolean("thesisOk", true);
             String nextBuyFrom = h.optString("nextBuyFrom", "");
-            if (bought > 0) pfOwned++;
+            boolean owned = bought > 1e-6;
+            if (owned) pfOwned++;
 
             JSONObject q = null;
             try {
-                String sym = h.optString("symbol");
-                q = quoteAny(h.optString("yahoo", sym + ".NS"), h.optString("yahooAlt", ""),
-                        h.optString("google", sym + ":NSE"), yahooOk);
+                q = quoteAny(h.optString("yahoo", us ? sym : sym + ".NS"), h.optString("yahooAlt", ""),
+                        h.optString("google", us ? sym + ":NASDAQ" : sym + ":NSE"), yahooOk);
             } catch (Exception e) {
                 errors.put(name + ": live price unavailable");
             }
@@ -237,44 +298,50 @@ public final class Engine {
             String signal;
             String reason;
             if (q == null) {
-                signal = prev.optString(name, bought > 0 ? "Hold" : "Wait");
+                signal = prev.optString(name, owned ? "Hold" : "Wait");
                 reason = "No live price right now; showing the last signal";
             } else {
                 double p = q.getDouble("price");
                 double day = q.getDouble("changePct") / 100.0;
                 h.put("price", p);
                 h.put("prevClose", q.getDouble("prevClose"));
-                if (bought > 0) {
+                h.put("changePct", q.getDouble("changePct"));
+                h.put("high52", q.getDouble("high52"));
+                h.put("quoteTime", q.getLong("time"));
+                if (owned) {
                     pfValue += p * bought;
                     pfPrevValue += q.getDouble("prevClose") * bought;
                     pfInvested += (avg > 0 ? avg : entry) * bought;
                     pfPriced++;
                 }
-                h.put("changePct", q.getDouble("changePct"));
-                h.put("high52", q.getDouble("high52"));
-                h.put("quoteTime", q.getLong("time"));
-                double weight = bought > 0 ? p * bought / capital : 0;
+                double weight = owned ? p * bought / capital : 0;
                 h.put("value", p * bought);
                 h.put("weight", weight * 100);
-                if (bought > 0 && avg > 0) h.put("gainPct", (p / avg - 1) * 100);
-                int firstLot = Math.max(1, Math.round(planned * 0.4f));
-                int left = Math.max(0, planned - bought);
-                int nextLot = Math.min(left, Math.max(1, Math.round(planned * 0.3f)));
+                if (owned && avg > 0) h.put("gainPct", (p / avg - 1) * 100);
+                double firstLot = planned * 0.4;
+                double left = Math.max(0, planned - bought);
+                double nextLot = Math.min(left, planned * 0.3);
+                String firstText = fractional
+                        ? "Buy about " + money(cs, firstLot * entry) + " (" + shares(firstLot, true) + " shares, first 40%)"
+                        : "Buy about " + Math.max(1, Math.round(firstLot)) + " shares (first 40%)";
+                String nextText = fractional
+                        ? "buy about " + money(cs, nextLot * entry) + " more (" + shares(nextLot, true) + " shares)"
+                        : "buy about " + Math.max(1, Math.round(nextLot)) + " more";
 
                 if ("Sell".equals(tag)) {
                     signal = "Sell";
                     reason = h.optString("note", "Latest review: thesis broken");
-                } else if (bought == 0) {
+                } else if (!owned) {
                     if (!thesisOk || "Wait".equals(tag)) {
                         signal = "Wait";
                         reason = "Paused by the latest review";
                     } else if (entry > 0 && p <= entry * (1 + buyBand)) {
                         signal = "Buy";
-                        reason = "Within " + Math.round(buyBand * 100) + "% of entry " + rs(entry)
-                                + ". Buy about " + firstLot + " shares (first 40%), limit " + rs(entry);
+                        reason = "Within " + Math.round(buyBand * 100) + "% of entry " + money(cs, entry) + ". "
+                                + firstText + ", limit " + money(cs, entry);
                     } else {
                         signal = "Wait";
-                        reason = String.format(Locale.US, "%.1f%% above entry ", (p / entry - 1) * 100) + rs(entry);
+                        reason = String.format(Locale.US, "%.1f%% above entry ", (p / entry - 1) * 100) + money(cs, entry);
                     }
                 } else {
                     if (weight > maxWeight) {
@@ -282,21 +349,23 @@ public final class Engine {
                         reason = String.format(Locale.US, "Trim: %.1f%% of portfolio, above the %.0f%% cap", weight * 100, maxWeight * 100);
                     } else if (thesisOk && avg > 0 && p <= avg * (1 - buyMoreDrop)) {
                         signal = "Buy more";
-                        reason = String.format(Locale.US, "%.1f%% below your cost ", (1 - p / avg) * 100) + rs(avg) + "; thesis intact";
+                        reason = String.format(Locale.US, "%.1f%% below your cost ", (1 - p / avg) * 100) + money(cs, avg) + "; thesis intact";
                     } else if (thesisOk && day <= -dayDrop) {
                         signal = "Buy more";
                         reason = String.format(Locale.US, "Down %.1f%% today; thesis intact", -day * 100);
-                    } else if (thesisOk && left > 0 && today.compareTo(nextBuyFrom) >= 0
+                    } else if (thesisOk && left > 1e-6 && today.compareTo(nextBuyFrom) >= 0
                             && entry > 0 && p <= entry * (1 + buyBand)) {
                         signal = "Buy more";
-                        reason = "Next tranche due: buy about " + nextLot + " more (" + bought + " of " + planned
-                                + " owned), limit " + rs(entry);
+                        reason = "Next tranche due: " + nextText + " (" + shares(bought, fractional) + " of "
+                                + shares(planned, fractional) + " owned), limit " + money(cs, entry);
                     } else if ("Buy more".equals(tag)) {
                         signal = "Buy more";
                         reason = h.optString("note", "Latest review says add");
                     } else {
                         signal = "Hold";
-                        reason = left > 0 ? bought + " of " + planned + " shares owned; next lot from " + nextBuyFrom
+                        reason = left > 1e-6
+                                ? shares(bought, fractional) + " of " + shares(planned, fractional) + " shares owned"
+                                        + (nextBuyFrom.isEmpty() ? "" : "; next lot from " + nextBuyFrom)
                                 : "Thesis intact";
                     }
                 }
@@ -308,15 +377,20 @@ public final class Engine {
             String before = prev.optString(name, "");
             boolean actionable = signal.equals("Buy") || signal.equals("Buy more") || signal.equals("Sell");
             if (notify && actionable && !signal.equals(before)) {
-                String priceText = q != null ? " Now " + rs(q.getDouble("price")) + "." : "";
-                notifyUser(ctx, 100 + i, signal.toUpperCase(Locale.US) + ": " + name, reason + "." + priceText);
+                String priceText = q != null ? " Now " + money(cs, q.getDouble("price")) + "." : "";
+                notifyUser(ctx, idBase + i, label + " \u00B7 " + signal.toUpperCase(Locale.US) + ": " + name,
+                        reason + "." + priceText);
             }
             out.put(h);
         }
 
+        JSONObject mkCfg = feed.optJSONObject("market");
+        if (mkCfg == null) mkCfg = new JSONObject();
+        String mkName = mkCfg.optString("name", us ? "S&P 500" : "Nifty 50");
         JSONObject market = new JSONObject();
         try {
-            JSONObject n = quoteAny("^NSEI", "", feed.optString("marketGoogle", "NIFTY_50:INDEXNSE"), yahooOk);
+            JSONObject n = quoteAny(mkCfg.optString("yahoo", us ? "^GSPC" : "^NSEI"), "",
+                    mkCfg.optString("google", feed.optString("marketGoogle", us ? ".INX:INDEXSP" : "NIFTY_50:INDEXNSE")), yahooOk);
             double p = n.getDouble("price");
             double hi = n.getDouble("high52");
             double day = n.getDouble("changePct") / 100.0;
@@ -324,16 +398,17 @@ public final class Engine {
             market = n;
             market.put("dip", dip);
             if (hi > 0) market.put("fromHighPct", (p / hi - 1) * 100);
-            if (dip && notify && !today.equals(sp.getString("lastDip", ""))) {
-                String text = String.format(Locale.US, "Nifty %,.0f (%+.1f%% today, %.1f%% below its 52-week high). ",
-                        p, day * 100, hi > 0 ? (1 - p / hi) * 100 : 0)
-                        + "Deploy the " + rs(feed.optDouble("reserve", 0)) + " reserve, value names first.";
-                notifyUser(ctx, 99, "MARKET DIP: deploy reserve", text);
-                sp.edit().putString("lastDip", today).apply();
+            if (dip && notify && !today.equals(sp.getString("lastDip_" + m, ""))) {
+                String text = String.format(Locale.US, "%s %,.0f (%+.1f%% today, %.1f%% below its 52-week high). ",
+                        mkName, p, day * 100, hi > 0 ? (1 - p / hi) * 100 : 0)
+                        + "Deploy the " + money(cs, feed.optDouble("reserve", 0)) + " reserve, value names first.";
+                notifyUser(ctx, idBase - 1, label + " \u00B7 MARKET DIP: deploy reserve", text);
+                sp.edit().putString("lastDip_" + m, today).apply();
             }
         } catch (Exception e) {
-            errors.put("Nifty: live level unavailable");
+            errors.put(mkName + ": live level unavailable");
         }
+        market.put("name", mkName);
 
         JSONObject portfolio = new JSONObject();
         portfolio.put("owned", pfOwned);
@@ -348,19 +423,25 @@ public final class Engine {
         }
 
         JSONObject state = new JSONObject();
-        state.put("portfolio", portfolio);
+        state.put("id", m);
+        state.put("label", label);
+        state.put("currencySymbol", cs);
+        state.put("fractional", fractional);
+        state.put("fx", feed.optDouble("fx", 0));
+        state.put("localCurrency", feed.optString("localCurrency", ""));
         state.put("fetchedAt", System.currentTimeMillis());
         state.put("planUpdated", feed.optString("updated", ""));
         state.put("summary", feed.optString("summary", ""));
         state.put("docUrl", feed.optString("docUrl", ""));
         state.put("reserve", feed.optDouble("reserve", 0));
         state.put("capital", capital);
+        state.put("portfolio", portfolio);
         state.put("market", market);
         state.put("holdings", out);
         state.put("errors", errors);
         state.put("source", yahooOk[0] ? "Yahoo Finance" : "Google Finance");
-        sp.edit().putString("signals", next.toString()).putString("state", state.toString()).apply();
-        return state;
+        state.put("open", marketHours(m));
+        sp.edit().putString("signals_" + m, next.toString()).putString("state_" + m, state.toString()).apply();
     }
 
     static void ensureChannel(Context ctx) {
@@ -376,6 +457,7 @@ public final class Engine {
         ensureChannel(ctx);
         Intent i = new Intent(ctx, MainActivity.class);
         i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        i.putExtra("market", title.startsWith("US") ? "us" : "india");
         PendingIntent pi = PendingIntent.getActivity(ctx, id, i,
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification n = new Notification.Builder(ctx, CHANNEL)

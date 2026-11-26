@@ -7,15 +7,10 @@ import android.app.job.JobService;
 public class RefreshJob extends JobService {
     @Override
     public boolean onStartJob(final JobParameters params) {
-        if (!Engine.marketHours()) return false;
+        if (!Engine.anyMarketOpen()) return false;
         new Thread(() -> {
-            boolean retry = false;
-            try {
-                Engine.run(getApplicationContext(), true);
-            } catch (Exception e) {
-                retry = true;
-            }
-            jobFinished(params, retry);
+            Engine.runAll(getApplicationContext(), true, true);
+            jobFinished(params, false);
         }).start();
         return true;
     }

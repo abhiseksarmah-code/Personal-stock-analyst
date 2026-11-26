@@ -24,12 +24,13 @@ jobs:
         with:
           gradle-version: "8.7"
 
-      - name: Point the app at this repo's plan feed
+      - name: Point the app at this repo's plan feeds (India and US)
         run: |
-          FEED="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/data/portfolio.json"
+          BASE="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/data"
           F=app/src/main/java/com/abhisek/portfolioalerts/Engine.java
-          sed -i "s|__FEED_URL__|${FEED}|" "$F"
-          grep -q "$FEED" "$F"
+          sed -i "s|__FEED_URL_US__|${BASE}/portfolio_us.json|; s|__FEED_URL__|${BASE}/portfolio.json|" "$F"
+          grep -q "${BASE}/portfolio_us.json" "$F"
+          grep -q "${BASE}/portfolio.json\"" "$F"
 
       - name: Check the live price source (informational)
         continue-on-error: true

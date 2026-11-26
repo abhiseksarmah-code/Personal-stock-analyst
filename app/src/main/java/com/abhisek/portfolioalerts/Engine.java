@@ -20,9 +20,12 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.text.SimpleDateFormat;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Downloads the plan (data/portfolio.json in the GitHub repo), fetches live prices,
@@ -59,7 +62,8 @@ public final class Engine {
         c.setReadTimeout(20000);
         c.setRequestProperty("User-Agent",
                 "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36");
-        c.setRequestProperty("Accept", "application/json,text/plain,*/*");
+        c.setRequestProperty("Accept", "application/json,text/html,*/*");
+        c.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
         int code = c.getResponseCode();
         InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -97,14 +101,65 @@ public final class Engine {
         return q;
     }
 
-    static JSONObject quoteAny(JSONObject h) throws Exception {
-        try {
-            return quote(h.optString("yahoo"));
-        } catch (Exception e) {
-            String alt = h.optString("yahooAlt", "");
-            if (alt.isEmpty()) throw e;
-            return quote(alt);
+    /** Backup source: the quote data Google Finance embeds in its quote page (about 1.2 MB a page). */
+    static JSONObject quoteGoogle(String gsym) throws Exception {
+        int c = gsym.indexOf(':');
+        String sym = gsym.substring(0, c);
+        String ex = gsym.substring(c + 1);
+        String body = get("https://www.google.com/finance/quote/" + URLEncoder.encode(sym, "UTF-8") + ":" + ex + "?hl=en");
+        Matcher m = Pattern.compile("\\[\"" + Pattern.quote(sym) + "\",\"" + Pattern.quote(ex)
+                + "\"\\],\"(?:[^\"\\\\]|\\\\.)*\",\\d+,(?:\"[A-Z]{3}\"|null),\\[(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+)[^\\]]*\\],null,(-?[0-9.Ee+-]+)")
+                .matcher(body);
+        if (!m.find()) throw new Exception("price not found");
+        double price = Double.parseDouble(m.group(1));
+        double prev = Double.parseDouble(m.group(4));
+        double hi = 0;
+        double lo = 0;
+        Matcher h = Pattern.compile(">52-wk high</div><div class=\"[^\"]*\">[^0-9<]*([0-9,]+(?:\\.[0-9]+)?)").matcher(body);
+        if (h.find()) hi = Double.parseDouble(h.group(1).replace(",", ""));
+        Matcher l = Pattern.compile(">52-wk low</div><div class=\"[^\"]*\">[^0-9<]*([0-9,]+(?:\\.[0-9]+)?)").matcher(body);
+        if (l.find()) lo = Double.parseDouble(l.group(1).replace(",", ""));
+        JSONObject q = new JSONObject();
+        q.put("price", price);
+        q.put("prevClose", prev);
+        q.put("changePct", prev > 0 ? (price / prev - 1) * 100 : 0);
+        q.put("high52", hi);
+        q.put("low52", lo);
+        q.put("time", System.currentTimeMillis());
+        q.put("src", "Google");
+        return q;
+    }
+
+    /** Yahoo first (tiny responses); if Yahoo refuses, Google for the rest of this run. */
+    static JSONObject quoteAny(String yahoo, String yahooAlt, String google, boolean[] yahooOk) throws Exception {
+        if (yahooOk[0]) {
+            try {
+                JSONObject q = quote(yahoo);
+                q.put("src", "Yahoo");
+                return q;
+            } catch (Exception e) {
+                if (String.valueOf(e.getMessage()).contains("429")) yahooOk[0] = false;
+                if (yahooAlt != null && !yahooAlt.isEmpty() && yahooOk[0]) {
+                    try {
+                        JSONObject q = quote(yahooAlt);
+                        q.put("src", "Yahoo");
+                        return q;
+                    } catch (Exception ignored) {
+                        // fall through to Google
+                    }
+                }
+            }
         }
+        return quoteGoogle(google);
+    }
+
+    /** Weekdays 9:00 am to 4:45 pm India time, when prices move. */
+    static boolean marketHours() {
+        Calendar c = Calendar.getInstance(TimeZone.getTimeZone("Asia/Kolkata"));
+        int dow = c.get(Calendar.DAY_OF_WEEK);
+        if (dow == Calendar.SATURDAY || dow == Calendar.SUNDAY) return false;
+        int mins = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
+        return mins >= 9 * 60 && mins <= 16 * 60 + 45;
     }
 
     static String today() {
@@ -144,6 +199,7 @@ public final class Engine {
         String today = today();
 
         JSONObject prev = new JSONObject(sp.getString("signals", "{}"));
+        boolean[] yahooOk = {true};
         JSONObject next = new JSONObject();
         JSONArray out = new JSONArray();
         JSONArray holdings = feed.optJSONArray("holdings");
@@ -162,7 +218,9 @@ public final class Engine {
 
             JSONObject q = null;
             try {
-                q = quoteAny(h);
+                String sym = h.optString("symbol");
+                q = quoteAny(h.optString("yahoo", sym + ".NS"), h.optString("yahooAlt", ""),
+                        h.optString("google", sym + ":NSE"), yahooOk);
             } catch (Exception e) {
                 errors.put(name + ": live price unavailable");
             }
@@ -242,7 +300,7 @@ public final class Engine {
 
         JSONObject market = new JSONObject();
         try {
-            JSONObject n = quote("^NSEI");
+            JSONObject n = quoteAny("^NSEI", "", feed.optString("marketGoogle", "NIFTY_50:INDEXNSE"), yahooOk);
             double p = n.getDouble("price");
             double hi = n.getDouble("high52");
             double day = n.getDouble("changePct") / 100.0;
@@ -271,6 +329,7 @@ public final class Engine {
         state.put("market", market);
         state.put("holdings", out);
         state.put("errors", errors);
+        state.put("source", yahooOk[0] ? "Yahoo Finance" : "Google Finance");
         sp.edit().putString("signals", next.toString()).putString("state", state.toString()).apply();
         return state;
     }

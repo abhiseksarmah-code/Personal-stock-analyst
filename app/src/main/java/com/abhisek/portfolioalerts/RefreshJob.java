@@ -7,6 +7,7 @@ import android.app.job.JobService;
 public class RefreshJob extends JobService {
     @Override
     public boolean onStartJob(final JobParameters params) {
+        if (!Engine.marketHours()) return false;
         new Thread(() -> {
             boolean retry = false;
             try {

@@ -179,7 +179,7 @@
     var foot = "Plan updated " + esc(s.planUpdated || "—") + " · Reserve " + rs(s.reserve, 0);
     if (s.summary) foot += "<br>" + esc(s.summary);
     if (s.docUrl) foot += "<br><a href='#' onclick='Android.open(\"" + esc(s.docUrl) + "\");return false;'>Open the portfolio doc</a>";
-    foot += "<br>Prices from Yahoo Finance, may be delayed. Research, not financial advice.";
+    foot += "<br>Prices from " + esc(s.source || "Yahoo Finance") + ", may be delayed. Hourly checks run on weekdays 9 am to 4:45 pm IST. Research, not financial advice.";
     document.getElementById("foot").innerHTML = foot;
   }
 

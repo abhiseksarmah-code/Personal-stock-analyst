@@ -3,24 +3,26 @@ name: Price source check
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Save sample Google Finance pages to the debug branch
+      - uses: actions/checkout@v4
+      - name: Check every symbol on Google Finance (the app's backup source)
         run: |
-          set +e
-          UA="Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
-          mkdir out && cd out
-          curl -s -A "$UA" -H "Accept-Language: en-US,en;q=0.9" -o bel.html "https://www.google.com/finance/quote/BEL:NSE?hl=en"
-          curl -s -A "$UA" -H "Accept-Language: en-US,en;q=0.9" -o nifty.html "https://www.google.com/finance/quote/NIFTY_50:INDEXNSE?hl=en"
-          curl -s -A "$UA" -H "Accept-Language: en-US,en;q=0.9" -o bel_beta.html "https://www.google.com/finance/beta/quote/BEL:NSE?hl=en"
-          ls -la
-          git init -q -b debug
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A && git commit -q -m "debug pages"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" debug
+          python3 - <<'PY'
+          import json, re, urllib.request, urllib.parse
+          UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
+          feed = json.load(open("data/portfolio.json"))
+          syms = [h.get("google", h["symbol"] + ":NSE") for h in feed["holdings"]] + [feed.get("marketGoogle", "NIFTY_50:INDEXNSE")]
+          for g in syms:
+              sym, ex = g.split(":")
+              url = "https://www.google.com/finance/quote/%s:%s?hl=en" % (urllib.parse.quote(sym, safe=""), ex)
+              try:
+                  req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"})
+                  body = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "ignore")
+                  m = re.search(r'\["%s","%s"\],"(?:[^"\\]|\\.)*",\d+,(?:"[A-Z]{3}"|null),\[(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+)[^\]]*\],null,(-?[0-9.Ee+-]+)' % (re.escape(sym), re.escape(ex)), body)
+                  print(g, "->", ("price %s prev %s" % (m.group(1), m.group(4))) if m else "NOT FOUND")
+              except Exception as e:
+                  print(g, "-> ERROR", e)
+          PY

@@ -1,0 +1,35 @@
+plugins { id "com.android.application" }
+
+android {
+    namespace "com.abhisek.portfolioalerts"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.abhisek.portfolioalerts"
+        minSdk 26
+        targetSdk 34
+        versionCode Integer.parseInt(System.getenv("VERSION_CODE") ?: "1")
+        versionName "1.0." + (System.getenv("VERSION_CODE") ?: "1")
+    }
+
+    signingConfigs {
+        release {
+            storeFile file("release.keystore")
+            storePassword "portfolio-alerts"
+            keyAlias "portfolio"
+            keyPassword "portfolio-alerts"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

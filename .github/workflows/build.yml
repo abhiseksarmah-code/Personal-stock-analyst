@@ -1,0 +1,67 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["data/**", "README.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Point the app at this repo's plan feed
+        run: |
+          FEED="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/data/portfolio.json"
+          F=app/src/main/java/com/abhisek/portfolioalerts/Engine.java
+          sed -i "s|__FEED_URL__|${FEED}|" "$F"
+          grep -q "$FEED" "$F"
+
+      - name: Check the live price source (informational)
+        continue-on-error: true
+        run: |
+          UA="Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36"
+          for s in '^NSEI' $(jq -r '.holdings[].yahoo' data/portfolio.json) ZOMATO.NS AMIORG.NS; do
+            enc=$(jq -rn --arg s "$s" '$s|@uri')
+            p=$(curl -s -A "$UA" "https://query1.finance.yahoo.com/v8/finance/chart/${enc}?interval=1d&range=1d" \
+                | jq -r '.chart.result[0].meta | "\(.regularMarketPrice) prev \(.chartPreviousClose) 52wH \(.fiftyTwoWeekHigh)"' 2>/dev/null)
+            echo "$s -> ${p:-FAILED}"
+          done
+
+      - name: Build signed APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: gradle :app:assembleRelease --no-daemon
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/release/app-release.apk PortfolioAlerts.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PortfolioAlerts-apk
+          path: PortfolioAlerts.apk
+
+      - name: Publish as the "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Portfolio Alerts (build ${{ github.run_number }})
+          body: |
+            Download **PortfolioAlerts.apk** below and open it on your Android phone.
+            The app checks prices every hour and notifies you when a stock turns Buy, Buy more or Sell.
+          files: PortfolioAlerts.apk
+          make_latest: true

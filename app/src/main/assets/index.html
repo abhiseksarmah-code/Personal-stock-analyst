@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Portfolio Alerts</title>
+<style>
+  :root {
+    --bg: #F7F6F2; --card: #FFFFFF; --ink: #1C1B18; --muted: #6B6A64; --line: #E6E4DC;
+    --buy: #15803D; --buy-bg: #DCFCE7; --more: #1D4ED8; --more-bg: #DBEAFE;
+    --sell: #B91C1C; --sell-bg: #FEE2E2; --hold: #44403C; --hold-bg: #EEECE6;
+    --wait: #92400E; --wait-bg: #FEF3C7; --up: #15803D; --down: #B91C1C;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151513; --card: #1F1F1C; --ink: #F2F1EC; --muted: #A3A29B; --line: #2E2E2A;
+      --buy: #4ADE80; --buy-bg: #14361F; --more: #93C5FD; --more-bg: #172A4D;
+      --sell: #FCA5A5; --sell-bg: #3F1717; --hold: #D6D3CD; --hold-bg: #2C2B27;
+      --wait: #FCD34D; --wait-bg: #3A2D0E; --up: #4ADE80; --down: #FCA5A5;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.4 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif; }
+  header { padding: 18px 16px 8px; position: sticky; top: 0; background: var(--bg); z-index: 2; }
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -0.2px; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  button.refresh { border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    border-radius: 999px; padding: 8px 14px; font: inherit; font-size: 14px; }
+  button.refresh.busy { opacity: 0.55; }
+  .market { margin: 10px 16px 0; padding: 12px 14px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; display: flex; justify-content: space-between; align-items: baseline; }
+  .market b { font-size: 17px; }
+  .market.dip { border-color: var(--sell); background: var(--sell-bg); }
+  .counts { display: flex; gap: 8px; padding: 12px 16px 4px; overflow-x: auto; }
+  .tab { flex: none; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; }
+  .tab.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  main { padding: 8px 16px 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 12px 14px; margin-bottom: 10px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .name { font-weight: 600; font-size: 16px; }
+  .cap { color: var(--muted); font-size: 12px; margin-left: 6px; font-weight: 400; }
+  .chip { flex: none; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: 0.3px; }
+  .s-Buy { color: var(--buy); background: var(--buy-bg); }
+  .s-Buymore { color: var(--more); background: var(--more-bg); }
+  .s-Sell { color: var(--sell); background: var(--sell-bg); }
+  .s-Hold { color: var(--hold); background: var(--hold-bg); }
+  .s-Wait { color: var(--wait); background: var(--wait-bg); }
+  .price { font-size: 20px; font-weight: 600; margin-top: 6px; }
+  .chg { font-size: 14px; margin-left: 6px; font-weight: 500; }
+  .up { color: var(--up); } .down { color: var(--down); }
+  .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .reason { font-size: 14px; margin-top: 8px; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  footer { color: var(--muted); font-size: 12px; padding: 0 16px 28px; }
+  footer a { color: var(--more); }
+  .err { color: var(--sell); font-size: 12px; margin: 8px 16px 0; }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <div>
+      <h1>Portfolio Alerts</h1>
+      <div class="sub" id="when">Loading…</div>
+    </div>
+    <button class="refresh" id="btn" onclick="refresh()">Refresh</button>
+  </div>
+</header>
+<div class="market" id="market" style="display:none"></div>
+<div class="err" id="err"></div>
+<div class="counts" id="tabs"></div>
+<main id="list"><div class="empty">Fetching prices…</div></main>
+<footer id="foot"></footer>
+
+<script>
+  var ORDER = { "Sell": 0, "Buy more": 1, "Buy": 2, "Hold": 3, "Wait": 4 };
+  var state = null, filter = "Action";
+
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function num(n, d) {
+    if (n == null || isNaN(n)) return "—";
+    d = d == null ? (Math.abs(n) >= 1000 ? 0 : 1) : d;
+    return Number(n).toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d });
+  }
+  function rs(n, d) { return (n == null || isNaN(n)) ? "—" : "₹" + num(n, d); }
+  function pct(n) { return (n == null || isNaN(n)) ? "" : (n > 0 ? "+" : "") + n.toFixed(1) + "%"; }
+  function cls(sig) { return "s-" + String(sig).replace(/\s/g, ""); }
+  function time(ms) {
+    if (!ms) return "";
+    var d = new Date(ms);
+    return d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+  }
+
+  function busy(on) {
+    var b = document.getElementById("btn");
+    b.className = on ? "refresh busy" : "refresh";
+    b.textContent = on ? "Refreshing…" : "Refresh";
+  }
+
+  window.refresh = function () { busy(true); Android.refresh(); };
+
+  window.onState = function (str) {
+    busy(false);
+    var s;
+    try { s = JSON.parse(str); } catch (e) { return; }
+    if (s.error) { document.getElementById("err").textContent = s.error; return; }
+    render(s);
+  };
+
+  function setFilter(f) { filter = f; render(state); }
+
+  function render(s) {
+    if (!s || !s.holdings) return;
+    state = s;
+    document.getElementById("when").textContent =
+      "Checked " + time(s.fetchedAt) + " · refreshes hourly";
+    document.getElementById("err").textContent = (s.errors || []).join(" · ");
+
+    var m = s.market || {}, mk = document.getElementById("market");
+    if (m.price) {
+      mk.style.display = "flex";
+      mk.className = m.dip ? "market dip" : "market";
+      mk.innerHTML = "<div><div class='meta' style='margin:0'>" + (m.dip ? "MARKET DIP · deploy reserve" : "Nifty 50") +
+        "</div><b>" + num(m.price, 0) + "</b> <span class='chg " + (m.changePct >= 0 ? "up" : "down") + "'>" +
+        pct(m.changePct) + "</span></div><div class='meta' style='margin:0;text-align:right'>" +
+        (m.fromHighPct != null ? Math.abs(m.fromHighPct).toFixed(1) + "% below 52-wk high" : "") + "</div>";
+    }
+
+    var hs = s.holdings.slice().sort(function (a, b) {
+      return (ORDER[a.signal] - ORDER[b.signal]) || String(a.name).localeCompare(b.name);
+    });
+    var counts = { "Action": 0, "All": hs.length, "Owned": 0 };
+    hs.forEach(function (h) {
+      counts[h.signal] = (counts[h.signal] || 0) + 1;
+      if (h.signal === "Buy" || h.signal === "Buy more" || h.signal === "Sell") counts.Action++;
+      if (h.boughtShares > 0) counts.Owned++;
+    });
+    var tabs = ["Action", "All", "Owned", "Buy", "Buy more", "Sell", "Hold", "Wait"];
+    document.getElementById("tabs").innerHTML = tabs.filter(function (t) {
+      return t === "Action" || t === "All" || counts[t];
+    }).map(function (t) {
+      return "<button class='tab" + (t === filter ? " on" : "") + "' onclick='setFilter(\"" + t + "\")'>" +
+        esc(t) + " " + (counts[t] || 0) + "</button>";
+    }).join("");
+
+    var shown = hs.filter(function (h) {
+      if (filter === "All") return true;
+      if (filter === "Action") return h.signal === "Buy" || h.signal === "Buy more" || h.signal === "Sell";
+      if (filter === "Owned") return h.boughtShares > 0;
+      return h.signal === filter;
+    });
+
+    document.getElementById("list").innerHTML = shown.length ? shown.map(function (h) {
+      var cost = h.boughtShares > 0 && h.avgCost
+        ? " · Your cost " + rs(h.avgCost) + (h.gainPct != null ? " (" + pct(h.gainPct) + ")" : "") : "";
+      var owned = h.boughtShares > 0 ? "Owned " + h.boughtShares + " of " + h.plannedShares + " shares"
+        : "Plan: " + h.plannedShares + " shares";
+      return "<div class='card'>" +
+        "<div class='row'><div class='name'>" + esc(h.name) + "<span class='cap'>" + esc(h.cap || "") + "</span></div>" +
+        "<span class='chip " + cls(h.signal) + "'>" + esc(h.signal) + "</span></div>" +
+        "<div class='price'>" + rs(h.price) + "<span class='chg " + (h.changePct >= 0 ? "up" : "down") + "'>" +
+        pct(h.changePct) + "</span></div>" +
+        "<div class='meta'>Entry " + rs(h.entry) + cost + "</div>" +
+        "<div class='meta'>" + owned + (h.weight ? " · " + h.weight.toFixed(1) + "% of portfolio" : "") + "</div>" +
+        "<div class='reason'>" + esc(h.reason) + "</div>" +
+        (h.note ? "<div class='note'>" + esc(h.note) + "</div>" : "") +
+        "</div>";
+    }).join("") : "<div class='empty'>" + (filter === "Action"
+      ? "Nothing to do right now. You'll get a notification when a stock turns Buy, Buy more or Sell."
+      : "No stocks here.") + "</div>";
+
+    var foot = "Plan updated " + esc(s.planUpdated || "—") + " · Reserve " + rs(s.reserve, 0);
+    if (s.summary) foot += "<br>" + esc(s.summary);
+    if (s.docUrl) foot += "<br><a href='#' onclick='Android.open(\"" + esc(s.docUrl) + "\");return false;'>Open the portfolio doc</a>";
+    foot += "<br>Prices from Yahoo Finance, may be delayed. Research, not financial advice.";
+    document.getElementById("foot").innerHTML = foot;
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    var cached = Android.state();
+    if (cached) { try { render(JSON.parse(cached)); } catch (e) {} }
+    refresh();
+  });
+</script>
+</body>
+</html>

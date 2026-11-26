@@ -107,10 +107,9 @@ public final class Engine {
         String sym = gsym.substring(0, c);
         String ex = gsym.substring(c + 1);
         String body = get("https://www.google.com/finance/quote/" + URLEncoder.encode(sym, "UTF-8") + ":" + ex + "?hl=en");
-        Matcher m = Pattern.compile("\\[\"" + Pattern.quote(sym) + "\",\"" + Pattern.quote(ex)
-                + "\"\\],\"(?:[^\"\\\\]|\\\\.)*\",\\d+,(?:\"[A-Z]{3}\"|null),\\[(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+)[^\\]]*\\],null,(-?[0-9.Ee+-]+)")
-                .matcher(body);
-        if (!m.find()) throw new Exception("price not found");
+        Matcher m = googleMatch(body, sym, ex);
+        if (m == null && sym.contains("&")) m = googleMatch(body, sym.replace("&", "\\u0026"), ex);
+        if (m == null) throw new Exception("price not found");
         double price = Double.parseDouble(m.group(1));
         double prev = Double.parseDouble(m.group(4));
         double hi = 0;
@@ -128,6 +127,13 @@ public final class Engine {
         q.put("time", System.currentTimeMillis());
         q.put("src", "Google");
         return q;
+    }
+
+    static Matcher googleMatch(String body, String sym, String ex) {
+        Matcher m = Pattern.compile("\\[\"" + Pattern.quote(sym) + "\",\"" + Pattern.quote(ex)
+                + "\"\\],\"(?:[^\"\\\\]|\\\\.)*\",\\d+,(?:\"[A-Z]{3}\"|null),\\[(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+),(-?[0-9.Ee+-]+)[^\\]]*\\],null,(-?[0-9.Ee+-]+)")
+                .matcher(body);
+        return m.find() ? m : null;
     }
 
     /** Yahoo first (tiny responses); if Yahoo refuses, Google for the rest of this run. */

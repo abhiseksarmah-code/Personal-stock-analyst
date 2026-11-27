@@ -1,9 +1,9 @@
 {
- "updated": "2026-11-26T14:50:00+05:30",
+ "updated": "2026-11-27T09:20:00+05:30",
  "summary": "Bought: Pricol, Premier Energies, Eternal (1 of 3 tranches). RBI policy 4 Dec.",
  "docUrl": "https://claude.ai/artifact/D15FMVE46EVX8ic73Qcp1p",
  "capital": 700000,
- "reserve": 37281,
+ "reserve": 37921,
  "rules": {
   "buyBand": 0.02,
   "buyMoreDrop": 0.07,
@@ -79,12 +79,12 @@
    "cap": "Large",
    "entry": 3470,
    "plannedShares": 16,
-   "boughtShares": 0,
-   "avgCost": null,
+   "boughtShares": 16,
+   "avgCost": 3470,
    "analystTag": null,
    "thesisOk": true,
    "nextBuyFrom": "",
-   "note": "SUVs, tractors and EVs at ~22x earnings"
+   "note": "Bought 16 @ ₹3,470 on 27 Nov (full position). SUVs, tractors and EVs at ~22x earnings"
   },
   {
    "name": "Eternal",

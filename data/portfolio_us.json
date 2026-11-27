@@ -20,7 +20,9 @@
   "dayDrop": 0.07,
   "marketDayDrop": 0.03,
   "marketFromHigh": 0.12,
-  "maxWeight": 0.12
+  "maxWeight": 0.12,
+  "firstLot": 0.5,
+  "nextLot": 0.25
  },
  "tranches": [
   {

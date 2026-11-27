@@ -1,11 +1,13 @@
 package com.abhisek.portfolioalerts;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -17,6 +19,9 @@ public class MainActivity extends Activity {
     private WebView web;
     private boolean firstResume = true;
     private String startMarket = "";
+    private boolean pendingInstall = false;
+    /** True while the app is on screen, so an update prompt can open straight away. */
+    static volatile boolean visible = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -48,8 +53,19 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        visible = false;
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+        visible = true;
+        if (pendingInstall && canInstall()) {
+            pendingInstall = false;
+            startInstall();
+        }
         if (firstResume) {
             firstResume = false;
             return;
@@ -57,7 +73,47 @@ public class MainActivity extends Activity {
         if (web != null) web.evaluateJavascript("window.refresh && window.refresh()", null);
     }
 
+    boolean canInstall() {
+        return Build.VERSION.SDK_INT < 26 || getPackageManager().canRequestPackageInstalls();
+    }
+
+    void startInstall() {
+        new Thread(() -> {
+            Context app = getApplicationContext();
+            int latest = Updater.prefs(app).getInt("updLatest", 0);
+            if (latest > Updater.currentVersion(app)) Updater.install(app, latest);
+            pushUpdateInfo();
+        }).start();
+    }
+
+    void pushUpdateInfo() {
+        final String js = "window.onUpdate && window.onUpdate(" + JSONObject.quote(Updater.info(getApplicationContext()).toString()) + ")";
+        runOnUiThread(() -> web.evaluateJavascript(js, null));
+    }
+
     class Bridge {
+        @JavascriptInterface
+        public String updateInfo() {
+            return Updater.info(getApplicationContext()).toString();
+        }
+
+        @JavascriptInterface
+        public void installUpdate() {
+            runOnUiThread(() -> {
+                if (!canInstall()) {
+                    pendingInstall = true;
+                    try {
+                        startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:" + getPackageName())));
+                        return;
+                    } catch (Exception ignored) {
+                        pendingInstall = false; // no settings screen: try the install anyway
+                    }
+                }
+                startInstall();
+            });
+        }
+
         @JavascriptInterface
         public String state() {
             return Engine.combinedState(getApplicationContext()).toString();
@@ -79,6 +135,8 @@ public class MainActivity extends Activity {
                 }
                 final String js = "window.onState(" + JSONObject.quote(s) + ")";
                 runOnUiThread(() -> web.evaluateJavascript(js, null));
+                Updater.check(getApplicationContext(), Updater.FOREGROUND_GAP);
+                pushUpdateInfo();
             }).start();
         }
 

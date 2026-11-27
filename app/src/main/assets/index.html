@@ -71,6 +71,10 @@
   footer a { color: var(--more); }
   .err { color: var(--sell); font-size: 12px; margin: 8px 16px 0; }
   .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+  .upd { display: none; margin: 10px 16px 0; padding: 10px 14px; border-radius: 14px; background: var(--more-bg);
+    color: var(--more); font-size: 14px; align-items: center; justify-content: space-between; gap: 10px; }
+  .upd button { flex: none; border: 0; border-radius: 999px; padding: 7px 14px; font: inherit; font-size: 14px;
+    font-weight: 600; background: var(--more); color: var(--bg); }
 </style>
 </head>
 <body>
@@ -91,6 +95,7 @@
   <div class="tile" id="mine"></div>
   <div class="tile" id="market"></div>
 </div>
+<div class="upd" id="upd"><span id="updText"></span><button id="updBtn" onclick="installUpdate()">Update</button></div>
 <div class="err" id="err"></div>
 <div class="counts" id="tabs"></div>
 <main id="list"><div class="empty">Fetching prices…</div></main>
@@ -131,6 +136,28 @@
   }
 
   window.refresh = function () { busy(true); Android.refresh(); };
+
+  var upd = {};
+  window.onUpdate = function (str) {
+    try { upd = JSON.parse(str) || {}; } catch (e) { upd = {}; }
+    var box = document.getElementById("upd");
+    var st = upd.status || "";
+    var working = /^(Downloading|Installing)/.test(st);
+    if (upd.available) {
+      document.getElementById("updText").textContent = st || ("New version ready (build " + upd.latest + ")");
+      document.getElementById("updBtn").style.display = working ? "none" : "";
+      box.style.display = "flex";
+    } else {
+      box.style.display = "none";
+    }
+    var v = document.getElementById("ver");
+    if (v) v.textContent = "App build " + (upd.version || "?") + (upd.available ? " · update available" : " · up to date");
+  };
+  window.installUpdate = function () {
+    document.getElementById("updText").textContent = "Downloading update…";
+    document.getElementById("updBtn").style.display = "none";
+    Android.installUpdate();
+  };
 
   window.onState = function (str) {
     busy(false);
@@ -257,8 +284,11 @@
     if (s.docUrl) foot += "<br><a href='#' onclick='Android.open(\"" + esc(s.docUrl) + "\");return false;'>Open the " +
       esc(s.label || "") + " portfolio doc</a>";
     foot += "<br>Prices from " + esc(s.source || "Yahoo Finance") + ", may be delayed. Hourly checks run while each market is open: " +
-      "India 9 am–4:45 pm IST, US 9:30 am–4:15 pm New York time. Research, not financial advice.";
+      "India 9 am–4:45 pm IST, US 9:30 am–4:15 pm New York time; plan changes are picked up hourly at any time. " +
+      "Research, not financial advice.<br><span id='ver'></span>";
     document.getElementById("foot").innerHTML = foot;
+    var v = document.getElementById("ver");
+    if (v && upd.version) v.textContent = "App build " + upd.version + (upd.available ? " · update available" : " · up to date");
   }
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -268,6 +298,7 @@
     } catch (e) {}
     try { all = JSON.parse(Android.state() || "{}"); } catch (e) { all = {}; }
     renderAll();
+    try { window.onUpdate(Android.updateInfo()); } catch (e) {}
     refresh();
   });
 </script>

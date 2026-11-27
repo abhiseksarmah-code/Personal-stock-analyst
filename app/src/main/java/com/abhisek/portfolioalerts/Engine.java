@@ -35,6 +35,9 @@ import java.util.regex.Pattern;
 public final class Engine {
     static final String FEED_URL = "__FEED_URL__";
     static final String FEED_URL_US = "__FEED_URL_US__";
+    /** owner/repo whose "latest" release holds the app (replaced at build time). */
+    static final String REPO = "__REPO__";
+    static final int UPDATE_ID = 900;
     static final String[] MARKETS = {"india", "us"};
     static final String PREFS = "portfolio";
     static final String CHANNEL = "signals";
@@ -200,7 +203,7 @@ public final class Engine {
     static synchronized JSONObject runAll(Context ctx, boolean notify, boolean onlyOpen) {
         SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         for (String m : MARKETS) {
-            if (onlyOpen && !marketHours(m)) continue;
+            if (onlyOpen && !marketHours(m) && !planChanged(ctx, m)) continue;
             try {
                 runMarket(ctx, m, notify);
             } catch (Exception e) {
@@ -238,9 +241,20 @@ public final class Engine {
         JSONObject feed;
         try {
             feed = new JSONObject(get(feedUrl(m) + "?t=" + System.currentTimeMillis()));
+            String old = savedFeed(sp, m);
+            if (notify && old != null && !old.equals(feed.toString())) {
+                try {
+                    String changes = planChanges(new JSONObject(old), feed);
+                    if (!changes.isEmpty()) {
+                        notifyUser(ctx, (us ? 300 : 100) - 2, label + " \u00B7 Plan updated", changes + ".");
+                    }
+                } catch (Exception ignored) {
+                    // a malformed old copy: just take the new plan
+                }
+            }
             sp.edit().putString("feed_" + m, feed.toString()).apply();
         } catch (Exception e) {
-            String cached = sp.getString("feed_" + m, us ? null : sp.getString("feed", null));
+            String cached = savedFeed(sp, m);
             if (cached == null) throw new Exception("Could not download the " + label + " plan: " + e.getMessage());
             feed = new JSONObject(cached);
             errors.put("Plan not refreshed (" + e.getMessage() + "); using the saved copy");
@@ -256,6 +270,9 @@ public final class Engine {
         double mktDay = rules.optDouble("marketDayDrop", 0.03);
         double mktHigh = rules.optDouble("marketFromHigh", us ? 0.12 : 0.08);
         double maxWeight = rules.optDouble("maxWeight", 0.12);
+        double firstLotShare = rules.optDouble("firstLot", 0.4);
+        double nextLotShare = rules.optDouble("nextLot", 0.3);
+        String firstPct = Math.round(firstLotShare * 100) + "%";
         double capital = feed.optDouble("capital", us ? 10892 : 700000);
         String today = today(m);
         int idBase = us ? 300 : 100;
@@ -318,12 +335,12 @@ public final class Engine {
                 h.put("value", p * bought);
                 h.put("weight", weight * 100);
                 if (owned && avg > 0) h.put("gainPct", (p / avg - 1) * 100);
-                double firstLot = planned * 0.4;
+                double firstLot = planned * firstLotShare;
                 double left = Math.max(0, planned - bought);
-                double nextLot = Math.min(left, planned * 0.3);
+                double nextLot = Math.min(left, planned * nextLotShare);
                 String firstText = fractional
-                        ? "Buy about " + money(cs, firstLot * entry) + " (" + shares(firstLot, true) + " shares, first 40%)"
-                        : "Buy about " + Math.max(1, Math.round(firstLot)) + " shares (first 40%)";
+                        ? "Buy about " + money(cs, firstLot * entry) + " (" + shares(firstLot, true) + " shares, first " + firstPct + ")"
+                        : "Buy about " + Math.max(1, Math.round(firstLot)) + " shares (first " + firstPct + ")";
                 String nextText = fractional
                         ? "buy about " + money(cs, nextLot * entry) + " more (" + shares(nextLot, true) + " shares)"
                         : "buy about " + Math.max(1, Math.round(nextLot)) + " more";
@@ -444,6 +461,67 @@ public final class Engine {
         sp.edit().putString("signals_" + m, next.toString()).putString("state_" + m, state.toString()).apply();
     }
 
+    static String savedFeed(SharedPreferences sp, String m) {
+        return sp.getString("feed_" + m, isUs(m) ? null : sp.getString("feed", null));
+    }
+
+    /** Cheap check (one small download) for a closed market: has the plan changed since the last run? */
+    static boolean planChanged(Context ctx, String m) {
+        SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        try {
+            String now = new JSONObject(get(feedUrl(m) + "?t=" + System.currentTimeMillis())).toString();
+            return !now.equals(savedFeed(sp, m));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    static java.util.LinkedHashMap<String, JSONObject> bySymbol(JSONObject feed) {
+        java.util.LinkedHashMap<String, JSONObject> map = new java.util.LinkedHashMap<>();
+        JSONArray a = feed.optJSONArray("holdings");
+        if (a == null) return map;
+        for (int i = 0; i < a.length(); i++) {
+            JSONObject h = a.optJSONObject(i);
+            if (h != null) map.put(h.optString("symbol"), h);
+        }
+        return map;
+    }
+
+    static String tagOf(JSONObject h) {
+        return h.isNull("analystTag") ? "" : h.optString("analystTag", "");
+    }
+
+    /** Plain-language list of what changed between two versions of a plan ("" if nothing that matters). */
+    static String planChanges(JSONObject oldF, JSONObject newF) {
+        String cs = newF.optString("currencySymbol", "");
+        boolean fr = newF.optBoolean("fractional", false);
+        java.util.LinkedHashMap<String, JSONObject> a = bySymbol(oldF), b = bySymbol(newF);
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        java.util.List<String> added = new java.util.ArrayList<>(), removed = new java.util.ArrayList<>(),
+                resized = new java.util.ArrayList<>();
+        for (String k : b.keySet()) if (!a.containsKey(k)) added.add(b.get(k).optString("name", k));
+        for (String k : a.keySet()) if (!b.containsKey(k)) removed.add(a.get(k).optString("name", k));
+        for (String k : b.keySet()) {
+            JSONObject o = a.get(k), n = b.get(k);
+            if (o == null) continue;
+            String name = n.optString("name", k);
+            double ob = o.optDouble("boughtShares", 0), nb = n.optDouble("boughtShares", 0);
+            if (nb > ob + 1e-6) {
+                String avg = n.isNull("avgCost") ? "" : ", avg cost " + money(cs, n.optDouble("avgCost", 0));
+                parts.add("Buy recorded: " + name + ", now " + shares(nb, fr) + " shares" + avg);
+            } else if (nb < ob - 1e-6) {
+                parts.add("Sale recorded: " + name + ", now " + shares(nb, fr) + " shares");
+            }
+            String ot = tagOf(o), nt = tagOf(n);
+            if (!ot.equals(nt)) parts.add(nt.isEmpty() ? name + ": review flag cleared" : name + ": review says " + nt);
+            if (Math.abs(o.optDouble("plannedShares", 0) - n.optDouble("plannedShares", 0)) > 1e-6) resized.add(name);
+        }
+        if (!added.isEmpty()) parts.add(0, "Added " + String.join(", ", added));
+        if (!removed.isEmpty()) parts.add(added.isEmpty() ? 0 : 1, "Removed " + String.join(", ", removed));
+        if (!resized.isEmpty()) parts.add("New target size: " + String.join(", ", resized));
+        return String.join("; ", parts);
+    }
+
     static void ensureChannel(Context ctx) {
         NotificationManager nm = ctx.getSystemService(NotificationManager.class);
         if (nm == null || nm.getNotificationChannel(CHANNEL) != null) return;
@@ -454,12 +532,16 @@ public final class Engine {
     }
 
     static void notifyUser(Context ctx, int id, String title, String text) {
-        ensureChannel(ctx);
         Intent i = new Intent(ctx, MainActivity.class);
         i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         i.putExtra("market", title.startsWith("US") ? "us" : "india");
         PendingIntent pi = PendingIntent.getActivity(ctx, id, i,
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        notifyUser(ctx, id, title, text, pi);
+    }
+
+    static void notifyUser(Context ctx, int id, String title, String text, PendingIntent pi) {
+        ensureChannel(ctx);
         Notification n = new Notification.Builder(ctx, CHANNEL)
                 .setSmallIcon(R.drawable.ic_notify)
                 .setContentTitle(title)

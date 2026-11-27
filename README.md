@@ -1,6 +1,6 @@
 # Portfolio Alerts
 
-Android app for Abhisek's two 10-year growth portfolios: India (₹7 lakh) and US (AED 40,000), each on its own tab. It checks live prices every hour while each market is open and sends a notification when a stock turns **Buy**, **Buy more** or **Sell**, or when the market dips enough to deploy the reserve.
+Android app for Abhisek's growth portfolios: India (₹7 lakh, 10 years) and US (AED 40,000, 3–5 years), each on its own tab. It checks live prices every hour while each market is open and sends a notification when a stock turns **Buy**, **Buy more** or **Sell**, or when the market dips enough to deploy the reserve.
 
 - **Download:** the latest APK is on the [Releases page](../../releases/latest) (`PortfolioAlerts.apk`).
 - **Plan feeds:** `data/portfolio.json` (India) and `data/portfolio_us.json` (US) hold entry prices, your purchases (shares and average cost) and the latest review's calls. Claude's daily reviews update it; the app downloads it on every refresh.
@@ -19,5 +19,7 @@ Android app for Abhisek's two 10-year growth portfolios: India (₹7 lakh) and U
 | Market dip | India: Nifty 50 down 3%+ in a day or 8%+ below its 52-week high. US: S&P 500 down 3%+ in a day or 12%+ below its 52-week high |
 
 Installing: open the APK on your phone and allow "Install unknown apps" for your browser or file manager when Android asks. Allow notifications when the app asks. For reliable hourly checks, set the app's battery usage to "Unrestricted" in Android settings.
+
+Staying up to date: every hour, even when markets are closed, the app re-downloads both plans and sends a "Plan updated" notification when holdings, recorded buys or review tags change. Every 6 hours (hourly while it is open) it checks the latest release for a newer build and installs it; Android may ask for one tap, and the first time it asks you to allow "Install unknown apps" for Portfolio Alerts.
 
 Research, not financial advice.
